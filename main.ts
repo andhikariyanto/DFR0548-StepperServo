@@ -139,33 +139,16 @@ namespace DFR0548 {
         pins.i2cWriteBuffer(PCA, b)
     }
 
-    // Write all 8 stepper channels (M3+M4 = CH0..3, M1+M2 = CH4..7)
-    // in ONE I2C transaction. This is used by tank motion when both motors
-    // need a step at the same time, reducing I2C overhead substantially.
-    function pwm8(
+    // micro:bit I2C writes must stay within the safe buffer size.
+    // PCA9685 needs 1 register byte + 16 data bytes for 4 channels,
+    // so two 17-byte transactions are used for both tank motors.
+    function tankWritePair(
         r0On: number, r0Off: number, r1On: number, r1Off: number,
         r2On: number, r2Off: number, r3On: number, r3Off: number,
         l0On: number, l0Off: number, l1On: number, l1Off: number,
         l2On: number, l2Off: number, l3On: number, l3Off: number): void {
-        let b = pins.createBuffer(33)
-        b[0] = LED0
-        b[1] = r0On & 0xFF; b[2] = (r0On >> 8) & 0x0F
-        b[3] = r0Off & 0xFF; b[4] = (r0Off >> 8) & 0x0F
-        b[5] = r1On & 0xFF; b[6] = (r1On >> 8) & 0x0F
-        b[7] = r1Off & 0xFF; b[8] = (r1Off >> 8) & 0x0F
-        b[9] = r2On & 0xFF; b[10] = (r2On >> 8) & 0x0F
-        b[11] = r2Off & 0xFF; b[12] = (r2Off >> 8) & 0x0F
-        b[13] = r3On & 0xFF; b[14] = (r3On >> 8) & 0x0F
-        b[15] = r3Off & 0xFF; b[16] = (r3Off >> 8) & 0x0F
-        b[17] = l0On & 0xFF; b[18] = (l0On >> 8) & 0x0F
-        b[19] = l0Off & 0xFF; b[20] = (l0Off >> 8) & 0x0F
-        b[21] = l1On & 0xFF; b[22] = (l1On >> 8) & 0x0F
-        b[23] = l1Off & 0xFF; b[24] = (l1Off >> 8) & 0x0F
-        b[25] = l2On & 0xFF; b[26] = (l2On >> 8) & 0x0F
-        b[27] = l2Off & 0xFF; b[28] = (l2Off >> 8) & 0x0F
-        b[29] = l3On & 0xFF; b[30] = (l3On >> 8) & 0x0F
-        b[31] = l3Off & 0xFF; b[32] = (l3Off >> 8) & 0x0F
-        pins.i2cWriteBuffer(PCA, b)
+        pwm4(0, r0On,r0Off, r1On,r1Off, r2On,r2Off, r3On,r3Off)
+        pwm4(4, l0On,l0Off, l1On,l1Off, l2On,l2Off, l3On,l3Off)
     }
 
     function tankPhasePair(leftType: StepperType, leftPhase: number, rightType: StepperType, rightPhase: number): void {
@@ -173,7 +156,6 @@ namespace DFR0548 {
         if (leftPhase < 0) leftPhase = leftPhase + 4
         rightPhase = rightPhase % 4
         if (rightPhase < 0) rightPhase = rightPhase + 4
-
         let r0 = 0, r1 = 0, r2 = 0, r3 = 0
         let l0 = 0, l1 = 0, l2 = 0, l3 = 0
 
@@ -210,7 +192,7 @@ namespace DFR0548 {
                 else if (leftPhase == 2) { lo0=GB_OFF; lo1=GA_OFF; lo2=GD_OFF; lo3=GC_OFF }
                 else if (leftPhase == 3) { lo0=GA_OFF; lo1=GD_OFF; lo2=GC_OFF; lo3=GB_OFF }
             }
-            pwm8(r0,ro0,r1,ro1,r2,ro2,r3,ro3,l0,lo0,l1,lo1,l2,lo2,l3,lo3)
+            tankWritePair(r0,ro0,r1,ro1,r2,ro2,r3,ro3,l0,lo0,l1,lo1,l2,lo2,l3,lo3)
         } else {
             // Right motor is 42BYGH.
             if (rightPhase == 0) { r0=GD_ON; r1=GC_ON; r2=GB_ON; r3=GA_ON }
@@ -230,7 +212,7 @@ namespace DFR0548 {
                 if (leftPhase == 1) { lo0=B_OFF; lo1=D_OFF; lo2=C_OFF; lo3=A_OFF }
                 else if (leftPhase == 2) { lo0=C_OFF; lo1=A_OFF; lo2=D_OFF; lo3=B_OFF }
                 else if (leftPhase == 3) { lo0=D_OFF; lo1=B_OFF; lo2=A_OFF; lo3=C_OFF }
-                pwm8(r0,ro0,r1,ro1,r2,ro2,r3,ro3,l0,lo0,l1,lo1,l2,lo2,l3,lo3)
+                tankWritePair(r0,ro0,r1,ro1,r2,ro2,r3,ro3,l0,lo0,l1,lo1,l2,lo2,l3,lo3)
             } else {
                 if (leftPhase == 0) { l0=GD_ON; l1=GC_ON; l2=GB_ON; l3=GA_ON }
                 else if (leftPhase == 1) { l0=GC_ON; l1=GB_ON; l2=GA_ON; l3=GD_ON }
@@ -240,7 +222,7 @@ namespace DFR0548 {
                 if (leftPhase == 1) { lo0=GC_OFF; lo1=GB_OFF; lo2=GA_OFF; lo3=GD_OFF }
                 else if (leftPhase == 2) { lo0=GB_OFF; lo1=GA_OFF; lo2=GD_OFF; lo3=GC_OFF }
                 else if (leftPhase == 3) { lo0=GA_OFF; lo1=GD_OFF; lo2=GC_OFF; lo3=GB_OFF }
-                pwm8(r0,ro0,r1,ro1,r2,ro2,r3,ro3,l0,lo0,l1,lo1,l2,lo2,l3,lo3)
+                tankWritePair(r0,ro0,r1,ro1,r2,ro2,r3,ro3,l0,lo0,l1,lo1,l2,lo2,l3,lo3)
             }
         }
     }
@@ -473,28 +455,28 @@ namespace DFR0548 {
     //% revolutions.min=0.01 revolutions.max=1000 revolutions.defl=1
     //% weight=37
     export function tankForward(revolutions: number): void {
-        tankMove(revolutions, Direction.CW, Direction.CW)
+        tankMove(revolutions, Direction.CCW, Direction.CW)
     }
 
     //% block="Tank backward %revolutions revolutions"
     //% revolutions.min=0.01 revolutions.max=1000 revolutions.defl=1
     //% weight=36
     export function tankBackward(revolutions: number): void {
-        tankMove(revolutions, Direction.CCW, Direction.CCW)
+        tankMove(revolutions, Direction.CW, Direction.CCW)
     }
 
     //% block="Tank turn left %revolutions revolutions"
     //% revolutions.min=0.01 revolutions.max=1000 revolutions.defl=1
     //% weight=35
     export function tankTurnLeft(revolutions: number): void {
-        tankMove(revolutions, Direction.CCW, Direction.CW)
+        tankMove(revolutions, Direction.CW, Direction.CW)
     }
 
     //% block="Tank turn right %revolutions revolutions"
     //% revolutions.min=0.01 revolutions.max=1000 revolutions.defl=1
     //% weight=34
     export function tankTurnRight(revolutions: number): void {
-        tankMove(revolutions, Direction.CW, Direction.CCW)
+        tankMove(revolutions, Direction.CCW, Direction.CCW)
     }
 
     //% block="Tank stop"
