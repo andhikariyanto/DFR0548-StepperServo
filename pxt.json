@@ -1,18 +1,20 @@
 {
-    "name": "DFR0548 Stepper Servo",
-    "version": "1.0.0",
-    "description": "MakeCode library for DFRobot DFR0548 Micro:bit Driver Expansion Board, focused on stepper motors and 8-servo control.",
+    "name": "DFR0548-StepperServo",
+    "version": "1.1.0",
+    "description": "Simple MakeCode library for DFRobot DFR0548: 2 steppers and 8 servos.",
     "license": "MIT",
     "dependencies": {
         "core": "*"
     },
     "files": [
         "main.ts",
-        "README.md",
+        "README.md"
+    ],
+    "testFiles": [
         "test.ts"
     ],
     "supportedTargets": [
         "microbit"
     ],
-    "preferredEditor": "tspr"
+    "preferredEditor": "tsprj"
 }
