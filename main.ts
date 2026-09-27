@@ -6,23 +6,24 @@ namespace DFR0548 {
     const PRESCALE = 0xFE
     const LED0 = 0x06
 
-    const STEP_A_ON = 2047
-    const STEP_A_OFF = 4095
-    const STEP_B_ON = 1
-    const STEP_B_OFF = 2047
-    const STEP_C_ON = 1023
-    const STEP_C_OFF = 3071
-    const STEP_D_ON = 3071
-    const STEP_D_OFF = 1023
+    // Patterns copied from the original DFR0548/DFRobot driver.
+    const A_ON = 2047
+    const A_OFF = 4095
+    const B_ON = 1
+    const B_OFF = 2047
+    const C_ON = 1023
+    const C_OFF = 3071
+    const D_ON = 3071
+    const D_OFF = 1023
 
-    const BYG_A_ON = 3071
-    const BYG_A_OFF = 1023
-    const BYG_B_ON = 1023
-    const BYG_B_OFF = 3071
-    const BYG_C_ON = 4095
-    const BYG_C_OFF = 2047
-    const BYG_D_ON = 2047
-    const BYG_D_OFF = 4095
+    const GA_ON = 3071
+    const GA_OFF = 1023
+    const GB_ON = 1023
+    const GB_OFF = 3071
+    const GC_ON = 4095
+    const GC_OFF = 2047
+    const GD_ON = 2047
+    const GD_OFF = 4095
 
     export enum StepperPort {
         //% block="M1 + M2"
@@ -67,10 +68,12 @@ namespace DFR0548 {
     let ready = false
     let leftPort = StepperPort.M1_M2
     let rightPort = StepperPort.M3_M4
-    let leftSpeed = 100
-    let rightSpeed = 100
     let leftType = StepperType.BYJ_28
     let rightType = StepperType.BYJ_28
+    let leftSteps = 2048
+    let rightSteps = 2048
+    let leftRpm = 10
+    let rightRpm = 10
 
     function writeReg(reg: number, value: number): void {
         let b = pins.createBuffer(2)
@@ -87,7 +90,7 @@ namespace DFR0548 {
     function init(): void {
         if (ready) return
         writeReg(MODE1, 0x00)
-        setFrequency(53)
+        setFrequency(50)
         ready = true
     }
 
@@ -99,6 +102,7 @@ namespace DFR0548 {
         writeReg(PRESCALE, prescale)
         writeReg(MODE1, oldMode)
         control.waitMicros(5000)
+        // RESTART + AI (auto increment), needed for burst writes.
         writeReg(MODE1, oldMode | 0xA1)
     }
 
@@ -112,85 +116,88 @@ namespace DFR0548 {
         pins.i2cWriteBuffer(PCA, b)
     }
 
-    function off(channel: number): void {
-        pwm(channel, 0, 0)
+    // Write four consecutive PCA9685 channels in one I2C transaction.
+    function pwm4(base: number, aOn: number, aOff: number, bOn: number, bOff: number, cOn: number, cOff: number, dOn: number, dOff: number): void {
+        let b = pins.createBuffer(17)
+        b[0] = LED0 + base * 4
+        b[1] = aOn & 0xFF
+        b[2] = (aOn >> 8) & 0x0F
+        b[3] = aOff & 0xFF
+        b[4] = (aOff >> 8) & 0x0F
+        b[5] = bOn & 0xFF
+        b[6] = (bOn >> 8) & 0x0F
+        b[7] = bOff & 0xFF
+        b[8] = (bOff >> 8) & 0x0F
+        b[9] = cOn & 0xFF
+        b[10] = (cOn >> 8) & 0x0F
+        b[11] = cOff & 0xFF
+        b[12] = (cOff >> 8) & 0x0F
+        b[13] = dOn & 0xFF
+        b[14] = (dOn >> 8) & 0x0F
+        b[15] = dOff & 0xFF
+        b[16] = (dOff >> 8) & 0x0F
+        pins.i2cWriteBuffer(PCA, b)
     }
 
     function stopPort(port: StepperPort): void {
         if (port == StepperPort.M1_M2) {
-            off(4); off(5); off(6); off(7)
+            pwm4(4, 0, 0, 0, 0, 0, 0, 0, 0)
         } else {
-            off(0); off(1); off(2); off(3)
+            pwm4(0, 0, 0, 0, 0, 0, 0, 0, 0)
         }
     }
 
-    function set28(port: StepperPort, direction: Direction): void {
-        if (port == StepperPort.M1_M2) {
-            if (direction == Direction.CW) {
-                pwm(4, STEP_A_ON, STEP_A_OFF)
-                pwm(6, STEP_B_ON, STEP_B_OFF)
-                pwm(5, STEP_C_ON, STEP_C_OFF)
-                pwm(7, STEP_D_ON, STEP_D_OFF)
-            } else {
-                pwm(7, STEP_A_ON, STEP_A_OFF)
-                pwm(5, STEP_B_ON, STEP_B_OFF)
-                pwm(6, STEP_C_ON, STEP_C_OFF)
-                pwm(4, STEP_D_ON, STEP_D_OFF)
-            }
-        } else {
-            if (direction == Direction.CW) {
-                pwm(0, STEP_A_ON, STEP_A_OFF)
-                pwm(2, STEP_B_ON, STEP_B_OFF)
-                pwm(1, STEP_C_ON, STEP_C_OFF)
-                pwm(3, STEP_D_ON, STEP_D_OFF)
-            } else {
-                pwm(3, STEP_A_ON, STEP_A_OFF)
-                pwm(1, STEP_B_ON, STEP_B_OFF)
-                pwm(2, STEP_C_ON, STEP_C_OFF)
-                pwm(0, STEP_D_ON, STEP_D_OFF)
-            }
-        }
+    // 28BYJ-48: one full-step is one transition through the 4-phase sequence.
+    // Default 2048 steps/rev corresponds to the common geared 28BYJ-48 full-step setup.
+    function phase28(port: StepperPort, phase: number): void {
+        let base = 4
+        if (port == StepperPort.M3_M4) base = 0
+        phase = phase % 4
+        if (phase < 0) phase = phase + 4
+        if (phase == 0) pwm4(base, A_ON,A_OFF, C_ON,C_OFF, B_ON,B_OFF, D_ON,D_OFF)
+        else if (phase == 1) pwm4(base, C_ON,C_OFF, B_ON,B_OFF, D_ON,D_OFF, A_ON,A_OFF)
+        else if (phase == 2) pwm4(base, B_ON,B_OFF, D_ON,D_OFF, A_ON,A_OFF, C_ON,C_OFF)
+        else pwm4(base, D_ON,D_OFF, A_ON,A_OFF, C_ON,C_OFF, B_ON,B_OFF)
     }
 
-    function set42(port: StepperPort, direction: Direction): void {
-        if (port == StepperPort.M1_M2) {
-            if (direction == Direction.CW) {
-                pwm(7, BYG_A_ON, BYG_A_OFF)
-                pwm(6, BYG_B_ON, BYG_B_OFF)
-                pwm(5, BYG_C_ON, BYG_C_OFF)
-                pwm(4, BYG_D_ON, BYG_D_OFF)
-            } else {
-                pwm(7, BYG_C_ON, BYG_C_OFF)
-                pwm(6, BYG_D_ON, BYG_D_OFF)
-                pwm(5, BYG_A_ON, BYG_A_OFF)
-                pwm(4, BYG_B_ON, BYG_B_OFF)
-            }
-        } else {
-            if (direction == Direction.CW) {
-                pwm(3, BYG_A_ON, BYG_A_OFF)
-                pwm(2, BYG_B_ON, BYG_B_OFF)
-                pwm(1, BYG_C_ON, BYG_C_OFF)
-                pwm(0, BYG_D_ON, BYG_D_OFF)
-            } else {
-                pwm(3, BYG_C_ON, BYG_C_OFF)
-                pwm(2, BYG_D_ON, BYG_D_OFF)
-                pwm(1, BYG_A_ON, BYG_A_OFF)
-                pwm(0, BYG_B_ON, BYG_B_OFF)
-            }
-        }
+    // 42BYGH1861A-C: original DFRobot pattern, rotated one phase per step.
+    function phase42(port: StepperPort, phase: number): void {
+        let base = 4
+        if (port == StepperPort.M3_M4) base = 0
+        phase = phase % 4
+        if (phase < 0) phase = phase + 4
+        if (phase == 0) pwm4(base, GD_ON,GD_OFF, GC_ON,GC_OFF, GB_ON,GB_OFF, GA_ON,GA_OFF)
+        else if (phase == 1) pwm4(base, GC_ON,GC_OFF, GB_ON,GB_OFF, GA_ON,GA_OFF, GD_ON,GD_OFF)
+        else if (phase == 2) pwm4(base, GB_ON,GB_OFF, GA_ON,GA_OFF, GD_ON,GD_OFF, GC_ON,GC_OFF)
+        else pwm4(base, GA_ON,GA_OFF, GD_ON,GD_OFF, GC_ON,GC_OFF, GB_ON,GB_OFF)
     }
 
-    function runFor(port: StepperPort, motorType: StepperType, direction: Direction, degrees: number, speed: number): void {
+    function stepOnce(port: StepperPort, motorType: StepperType, phase: number): void {
+        if (motorType == StepperType.BYJ_28) phase28(port, phase)
+        else phase42(port, phase)
+    }
+
+    function stepDelayUs(stepsPerRev: number, rpm: number): number {
+        if (stepsPerRev < 1) stepsPerRev = 1
+        if (rpm < 1) rpm = 1
+        let us = Math.round(60000000 / (stepsPerRev * rpm))
+        if (us < 500) us = 500
+        return us
+    }
+
+    function moveSteps(port: StepperPort, motorType: StepperType, stepsPerRev: number, direction: Direction, steps: number, rpm: number): void {
         init()
-        if (degrees <= 0 || speed <= 0) return
-        speed = Math.max(1, Math.min(100, speed))
-        if (motorType == StepperType.BYJ_28) set28(port, direction)
-        else set42(port, direction)
-        // The original DFR0548 driver is time-based rather than STEP/DIR based.
-        // Keep that behavior here so the library remains compatible with the board.
-        let ms = 1000 * degrees / 360
-        ms = ms * 100 / speed
-        basic.pause(Math.round(ms))
+        steps = Math.round(Math.abs(steps))
+        if (steps <= 0) return
+        rpm = Math.max(1, Math.min(300, rpm))
+        let phase = 0
+        let delayUs = stepDelayUs(stepsPerRev, rpm)
+        for (let i = 0; i < steps; i++) {
+            if (direction == Direction.CW) phase++
+            else phase--
+            stepOnce(port, motorType, phase)
+            control.waitMicros(delayUs)
+        }
         stopPort(port)
     }
 
@@ -220,26 +227,50 @@ namespace DFR0548 {
     //% weight=80
     export function stepperConfigure(port: StepperPort, motorType: StepperType, stepsPerRev: number): void {
         init()
-        if (port == StepperPort.M1_M2) leftType = motorType
-        else rightType = motorType
+        stepsPerRev = Math.max(1, Math.round(stepsPerRev))
+        if (port == StepperPort.M1_M2) {
+            leftType = motorType
+            leftSteps = stepsPerRev
+        } else {
+            rightType = motorType
+            rightSteps = stepsPerRev
+        }
     }
 
-    //% block="Stepper %port %direction degrees %degrees speed %speed"
-    //% degrees.min=0 degrees.max=36000 degrees.defl=90
-    //% speed.min=1 speed.max=100 speed.defl=100
-    //% weight=70
-    export function stepperDegrees(port: StepperPort, direction: Direction, degrees: number, speed: number): void {
+    //% block="Stepper %port %direction steps %steps speed %rpm RPM"
+    //% steps.min=1 steps.max=100000 steps.defl=2048
+    //% rpm.min=1 rpm.max=300 rpm.defl=10
+    //% weight=79
+    export function stepperSteps(port: StepperPort, direction: Direction, steps: number, rpm: number): void {
         let motorType = leftType
-        if (port == StepperPort.M3_M4) motorType = rightType
-        runFor(port, motorType, direction, Math.abs(degrees), speed)
+        let stepsPerRev = leftSteps
+        if (port == StepperPort.M3_M4) {
+            motorType = rightType
+            stepsPerRev = rightSteps
+        }
+        moveSteps(port, motorType, stepsPerRev, direction, steps, rpm)
     }
 
-    //% block="Stepper %port %direction revolutions %revolutions speed %speed"
-    //% revolutions.min=0 revolutions.max=1000 revolutions.defl=1
-    //% speed.min=1 speed.max=100 speed.defl=100
-    //% weight=60
-    export function stepperRevolutions(port: StepperPort, direction: Direction, revolutions: number, speed: number): void {
-        stepperDegrees(port, direction, Math.abs(revolutions) * 360, speed)
+    //% block="Stepper %port %direction degrees %degrees speed %rpm RPM"
+    //% degrees.min=1 degrees.max=36000 degrees.defl=90
+    //% rpm.min=1 rpm.max=300 rpm.defl=10
+    //% weight=78
+    export function stepperDegrees(port: StepperPort, direction: Direction, degrees: number, rpm: number): void {
+        let stepsPerRev = leftSteps
+        if (port == StepperPort.M3_M4) stepsPerRev = rightSteps
+        let steps = Math.round(Math.abs(degrees) * stepsPerRev / 360)
+        stepperSteps(port, direction, steps, rpm)
+    }
+
+    //% block="Stepper %port %direction revolutions %revolutions speed %rpm RPM"
+    //% revolutions.min=0.01 revolutions.max=1000 revolutions.defl=1
+    //% rpm.min=1 rpm.max=300 rpm.defl=10
+    //% weight=77
+    export function stepperRevolutions(port: StepperPort, direction: Direction, revolutions: number, rpm: number): void {
+        let stepsPerRev = leftSteps
+        if (port == StepperPort.M3_M4) stepsPerRev = rightSteps
+        let steps = Math.round(Math.abs(revolutions) * stepsPerRev)
+        stepperSteps(port, direction, steps, rpm)
     }
 
     //% block="Stepper stop %port"
@@ -256,84 +287,94 @@ namespace DFR0548 {
         rightPort = right
     }
 
-    //% block="Tank speed %speed %percent"
-    //% speed.min=1 speed.max=100 speed.defl=100
+    //% block="Tank speed %rpm RPM"
+    //% rpm.min=1 rpm.max=300 rpm.defl=10
     //% weight=39
-    export function tankSpeed(speed: number): void {
-        speed = Math.max(1, Math.min(100, speed))
-        leftSpeed = speed
-        rightSpeed = speed
+    export function tankSpeed(rpm: number): void {
+        rpm = Math.max(1, Math.min(300, rpm))
+        leftRpm = rpm
+        rightRpm = rpm
     }
 
-    //% block="Tank left speed %leftSpeed right speed %rightSpeed"
-    //% leftSpeed.min=1 leftSpeed.max=100 leftSpeed.defl=100
-    //% rightSpeed.min=1 rightSpeed.max=100 rightSpeed.defl=100
+    //% block="Tank left speed %leftRPM RPM right speed %rightRPM RPM"
+    //% leftRPM.min=1 leftRPM.max=300 leftRPM.defl=10
+    //% rightRPM.min=1 rightRPM.max=300 rightRPM.defl=10
     //% weight=38
-    export function tankDifferentialSpeed(left: number, right: number): void {
-        leftSpeed = Math.max(1, Math.min(100, left))
-        rightSpeed = Math.max(1, Math.min(100, right))
+    export function tankDifferentialSpeed(leftRPM: number, rightRPM: number): void {
+        leftRpm = Math.max(1, Math.min(300, leftRPM))
+        rightRpm = Math.max(1, Math.min(300, rightRPM))
     }
 
-    //% block="Tank forward %degrees degrees"
-    //% degrees.min=1 degrees.max=36000 degrees.defl=360
+    // Tank commands intentionally use the configured steps/rev of each motor.
+    // Both motors receive the same number of mechanical revolutions.
+    function tankMove(revolutions: number, leftDirection: Direction, rightDirection: Direction): void {
+        init()
+        let leftCount = Math.round(Math.abs(revolutions) * leftSteps)
+        let rightCount = Math.round(Math.abs(revolutions) * rightSteps)
+        let maxCount = Math.max(leftCount, rightCount)
+        if (maxCount <= 0) return
+
+        let leftPhase = 0
+        let rightPhase = 0
+        let leftDone = 0
+        let rightDone = 0
+        let leftNext = 0
+        let rightNext = 0
+        let leftDelay = stepDelayUs(leftSteps, leftRpm)
+        let rightDelay = stepDelayUs(rightSteps, rightRpm)
+        let elapsed = 0
+        let tick = 500
+
+        while (leftDone < leftCount || rightDone < rightCount) {
+            if (leftDone < leftCount && elapsed >= leftNext) {
+                if (leftDirection == Direction.CW) leftPhase++
+                else leftPhase--
+                if (leftType == StepperType.BYJ_28) phase28(leftPort, leftPhase)
+                else phase42(leftPort, leftPhase)
+                leftDone++
+                leftNext += leftDelay
+            }
+            if (rightDone < rightCount && elapsed >= rightNext) {
+                if (rightDirection == Direction.CW) rightPhase++
+                else rightPhase--
+                if (rightType == StepperType.BYJ_28) phase28(rightPort, rightPhase)
+                else phase42(rightPort, rightPhase)
+                rightDone++
+                rightNext += rightDelay
+            }
+            control.waitMicros(tick)
+            elapsed += tick
+        }
+        stopPort(leftPort)
+        stopPort(rightPort)
+    }
+
+    //% block="Tank forward %revolutions revolutions"
+    //% revolutions.min=0.01 revolutions.max=1000 revolutions.defl=1
     //% weight=37
-    export function tankForward(degrees: number): void {
-        init()
-        let d = Math.abs(degrees)
-        if (leftType == StepperType.BYJ_28) set28(leftPort, Direction.CW)
-        else set42(leftPort, Direction.CW)
-        if (rightType == StepperType.BYJ_28) set28(rightPort, Direction.CW)
-        else set42(rightPort, Direction.CW)
-        let maxSpeed = Math.max(leftSpeed, rightSpeed)
-        basic.pause(Math.round(1000 * d / 360 * 100 / maxSpeed))
-        stopPort(leftPort)
-        stopPort(rightPort)
+    export function tankForward(revolutions: number): void {
+        tankMove(revolutions, Direction.CW, Direction.CW)
     }
 
-    //% block="Tank backward %degrees degrees"
-    //% degrees.min=1 degrees.max=36000 degrees.defl=360
+    //% block="Tank backward %revolutions revolutions"
+    //% revolutions.min=0.01 revolutions.max=1000 revolutions.defl=1
     //% weight=36
-    export function tankBackward(degrees: number): void {
-        init()
-        let d = Math.abs(degrees)
-        if (leftType == StepperType.BYJ_28) set28(leftPort, Direction.CCW)
-        else set42(leftPort, Direction.CCW)
-        if (rightType == StepperType.BYJ_28) set28(rightPort, Direction.CCW)
-        else set42(rightPort, Direction.CCW)
-        let maxSpeed = Math.max(leftSpeed, rightSpeed)
-        basic.pause(Math.round(1000 * d / 360 * 100 / maxSpeed))
-        stopPort(leftPort)
-        stopPort(rightPort)
+    export function tankBackward(revolutions: number): void {
+        tankMove(revolutions, Direction.CCW, Direction.CCW)
     }
 
-    //% block="Tank turn left %degrees degrees"
-    //% degrees.min=1 degrees.max=36000 degrees.defl=180
+    //% block="Tank turn left %revolutions revolutions"
+    //% revolutions.min=0.01 revolutions.max=1000 revolutions.defl=1
     //% weight=35
-    export function tankTurnLeft(degrees: number): void {
-        init()
-        let d = Math.abs(degrees)
-        if (leftType == StepperType.BYJ_28) set28(leftPort, Direction.CCW)
-        else set42(leftPort, Direction.CCW)
-        if (rightType == StepperType.BYJ_28) set28(rightPort, Direction.CW)
-        else set42(rightPort, Direction.CW)
-        basic.pause(Math.round(1000 * d / 360 * 100 / Math.max(leftSpeed, rightSpeed)))
-        stopPort(leftPort)
-        stopPort(rightPort)
+    export function tankTurnLeft(revolutions: number): void {
+        tankMove(revolutions, Direction.CCW, Direction.CW)
     }
 
-    //% block="Tank turn right %degrees degrees"
-    //% degrees.min=1 degrees.max=36000 degrees.defl=180
+    //% block="Tank turn right %revolutions revolutions"
+    //% revolutions.min=0.01 revolutions.max=1000 revolutions.defl=1
     //% weight=34
-    export function tankTurnRight(degrees: number): void {
-        init()
-        let d = Math.abs(degrees)
-        if (leftType == StepperType.BYJ_28) set28(leftPort, Direction.CW)
-        else set42(leftPort, Direction.CW)
-        if (rightType == StepperType.BYJ_28) set28(rightPort, Direction.CCW)
-        else set42(rightPort, Direction.CCW)
-        basic.pause(Math.round(1000 * d / 360 * 100 / Math.max(leftSpeed, rightSpeed)))
-        stopPort(leftPort)
-        stopPort(rightPort)
+    export function tankTurnRight(revolutions: number): void {
+        tankMove(revolutions, Direction.CW, Direction.CCW)
     }
 
     //% block="Tank stop"
