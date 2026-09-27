@@ -139,6 +139,112 @@ namespace DFR0548 {
         pins.i2cWriteBuffer(PCA, b)
     }
 
+    // Write all 8 stepper channels (M3+M4 = CH0..3, M1+M2 = CH4..7)
+    // in ONE I2C transaction. This is used by tank motion when both motors
+    // need a step at the same time, reducing I2C overhead substantially.
+    function pwm8(
+        r0On: number, r0Off: number, r1On: number, r1Off: number,
+        r2On: number, r2Off: number, r3On: number, r3Off: number,
+        l0On: number, l0Off: number, l1On: number, l1Off: number,
+        l2On: number, l2Off: number, l3On: number, l3Off: number): void {
+        let b = pins.createBuffer(33)
+        b[0] = LED0
+        b[1] = r0On & 0xFF; b[2] = (r0On >> 8) & 0x0F
+        b[3] = r0Off & 0xFF; b[4] = (r0Off >> 8) & 0x0F
+        b[5] = r1On & 0xFF; b[6] = (r1On >> 8) & 0x0F
+        b[7] = r1Off & 0xFF; b[8] = (r1Off >> 8) & 0x0F
+        b[9] = r2On & 0xFF; b[10] = (r2On >> 8) & 0x0F
+        b[11] = r2Off & 0xFF; b[12] = (r2Off >> 8) & 0x0F
+        b[13] = r3On & 0xFF; b[14] = (r3On >> 8) & 0x0F
+        b[15] = r3Off & 0xFF; b[16] = (r3Off >> 8) & 0x0F
+        b[17] = l0On & 0xFF; b[18] = (l0On >> 8) & 0x0F
+        b[19] = l0Off & 0xFF; b[20] = (l0Off >> 8) & 0x0F
+        b[21] = l1On & 0xFF; b[22] = (l1On >> 8) & 0x0F
+        b[23] = l1Off & 0xFF; b[24] = (l1Off >> 8) & 0x0F
+        b[25] = l2On & 0xFF; b[26] = (l2On >> 8) & 0x0F
+        b[27] = l2Off & 0xFF; b[28] = (l2Off >> 8) & 0x0F
+        b[29] = l3On & 0xFF; b[30] = (l3On >> 8) & 0x0F
+        b[31] = l3Off & 0xFF; b[32] = (l3Off >> 8) & 0x0F
+        pins.i2cWriteBuffer(PCA, b)
+    }
+
+    function tankPhasePair(leftType: StepperType, leftPhase: number, rightType: StepperType, rightPhase: number): void {
+        leftPhase = leftPhase % 4
+        if (leftPhase < 0) leftPhase = leftPhase + 4
+        rightPhase = rightPhase % 4
+        if (rightPhase < 0) rightPhase = rightPhase + 4
+
+        let r0 = 0, r1 = 0, r2 = 0, r3 = 0
+        let l0 = 0, l1 = 0, l2 = 0, l3 = 0
+
+        if (rightType == StepperType.BYJ_28) {
+            if (rightPhase == 0) { r0=A_ON; r1=C_ON; r2=B_ON; r3=D_ON }
+            else if (rightPhase == 1) { r0=B_ON; r1=D_ON; r2=C_ON; r3=A_ON }
+            else if (rightPhase == 2) { r0=C_ON; r1=A_ON; r2=D_ON; r3=B_ON }
+            else { r0=D_ON; r1=B_ON; r2=A_ON; r3=C_ON }
+            // OFF values are fixed per coil pattern.
+            let ro0 = A_OFF, ro1 = C_OFF, ro2 = B_OFF, ro3 = D_OFF
+            if (rightPhase == 1) { ro0=B_OFF; ro1=D_OFF; ro2=C_OFF; ro3=A_OFF }
+            else if (rightPhase == 2) { ro0=C_OFF; ro1=A_OFF; ro2=D_OFF; ro3=B_OFF }
+            else if (rightPhase == 3) { ro0=D_OFF; ro1=B_OFF; ro2=A_OFF; ro3=C_OFF }
+            if (leftType == StepperType.BYJ_28) {
+                if (leftPhase == 0) { l0=A_ON; l1=C_ON; l2=B_ON; l3=D_ON }
+                else if (leftPhase == 1) { l0=B_ON; l1=D_ON; l2=C_ON; l3=A_ON }
+                else if (leftPhase == 2) { l0=C_ON; l1=A_ON; l2=D_ON; l3=B_ON }
+                else { l0=D_ON; l1=B_ON; l2=A_ON; l3=C_ON }
+            } else {
+                if (leftPhase == 0) { l0=GD_ON; l1=GC_ON; l2=GB_ON; l3=GA_ON }
+                else if (leftPhase == 1) { l0=GC_ON; l1=GB_ON; l2=GA_ON; l3=GD_ON }
+                else if (leftPhase == 2) { l0=GB_ON; l1=GA_ON; l2=GD_ON; l3=GC_ON }
+                else { l0=GA_ON; l1=GD_ON; l2=GC_ON; l3=GB_ON }
+            }
+            let lo0:number; let lo1:number; let lo2:number; let lo3:number
+            if (leftType == StepperType.BYJ_28) {
+                lo0=A_OFF; lo1=C_OFF; lo2=B_OFF; lo3=D_OFF
+                if (leftPhase == 1) { lo0=B_OFF; lo1=D_OFF; lo2=C_OFF; lo3=A_OFF }
+                else if (leftPhase == 2) { lo0=C_OFF; lo1=A_OFF; lo2=D_OFF; lo3=B_OFF }
+                else if (leftPhase == 3) { lo0=D_OFF; lo1=B_OFF; lo2=A_OFF; lo3=C_OFF }
+            } else {
+                lo0=GD_OFF; lo1=GC_OFF; lo2=GB_OFF; lo3=GA_OFF
+                if (leftPhase == 1) { lo0=GC_OFF; lo1=GB_OFF; lo2=GA_OFF; lo3=GD_OFF }
+                else if (leftPhase == 2) { lo0=GB_OFF; lo1=GA_OFF; lo2=GD_OFF; lo3=GC_OFF }
+                else if (leftPhase == 3) { lo0=GA_OFF; lo1=GD_OFF; lo2=GC_OFF; lo3=GB_OFF }
+            }
+            pwm8(r0,ro0,r1,ro1,r2,ro2,r3,ro3,l0,lo0,l1,lo1,l2,lo2,l3,lo3)
+        } else {
+            // Right motor is 42BYGH.
+            if (rightPhase == 0) { r0=GD_ON; r1=GC_ON; r2=GB_ON; r3=GA_ON }
+            else if (rightPhase == 1) { r0=GC_ON; r1=GB_ON; r2=GA_ON; r3=GD_ON }
+            else if (rightPhase == 2) { r0=GB_ON; r1=GA_ON; r2=GD_ON; r3=GC_ON }
+            else { r0=GA_ON; r1=GD_ON; r2=GC_ON; r3=GB_ON }
+            let ro0=GD_OFF, ro1=GC_OFF, ro2=GB_OFF, ro3=GA_OFF
+            if (rightPhase == 1) { ro0=GC_OFF; ro1=GB_OFF; ro2=GA_OFF; ro3=GD_OFF }
+            else if (rightPhase == 2) { ro0=GB_OFF; ro1=GA_OFF; ro2=GD_OFF; ro3=GC_OFF }
+            else if (rightPhase == 3) { ro0=GA_OFF; ro1=GD_OFF; ro2=GC_OFF; ro3=GB_OFF }
+            if (leftType == StepperType.BYJ_28) {
+                if (leftPhase == 0) { l0=A_ON; l1=C_ON; l2=B_ON; l3=D_ON }
+                else if (leftPhase == 1) { l0=B_ON; l1=D_ON; l2=C_ON; l3=A_ON }
+                else if (leftPhase == 2) { l0=C_ON; l1=A_ON; l2=D_ON; l3=B_ON }
+                else { l0=D_ON; l1=B_ON; l2=A_ON; l3=C_ON }
+                let lo0=A_OFF, lo1=C_OFF, lo2=B_OFF, lo3=D_OFF
+                if (leftPhase == 1) { lo0=B_OFF; lo1=D_OFF; lo2=C_OFF; lo3=A_OFF }
+                else if (leftPhase == 2) { lo0=C_OFF; lo1=A_OFF; lo2=D_OFF; lo3=B_OFF }
+                else if (leftPhase == 3) { lo0=D_OFF; lo1=B_OFF; lo2=A_OFF; lo3=C_OFF }
+                pwm8(r0,ro0,r1,ro1,r2,ro2,r3,ro3,l0,lo0,l1,lo1,l2,lo2,l3,lo3)
+            } else {
+                if (leftPhase == 0) { l0=GD_ON; l1=GC_ON; l2=GB_ON; l3=GA_ON }
+                else if (leftPhase == 1) { l0=GC_ON; l1=GB_ON; l2=GA_ON; l3=GD_ON }
+                else if (leftPhase == 2) { l0=GB_ON; l1=GA_ON; l2=GD_ON; l3=GC_ON }
+                else { l0=GA_ON; l1=GD_ON; l2=GC_ON; l3=GB_ON }
+                let lo0=GD_OFF, lo1=GC_OFF, lo2=GB_OFF, lo3=GA_OFF
+                if (leftPhase == 1) { lo0=GC_OFF; lo1=GB_OFF; lo2=GA_OFF; lo3=GD_OFF }
+                else if (leftPhase == 2) { lo0=GB_OFF; lo1=GA_OFF; lo2=GD_OFF; lo3=GC_OFF }
+                else if (leftPhase == 3) { lo0=GA_OFF; lo1=GD_OFF; lo2=GC_OFF; lo3=GB_OFF }
+                pwm8(r0,ro0,r1,ro1,r2,ro2,r3,ro3,l0,lo0,l1,lo1,l2,lo2,l3,lo3)
+            }
+        }
+    }
+
     function stopPort(port: StepperPort): void {
         if (port == StepperPort.M1_M2) {
             pwm4(4, 0, 0, 0, 0, 0, 0, 0, 0)
@@ -155,9 +261,9 @@ namespace DFR0548 {
         phase = phase % 4
         if (phase < 0) phase = phase + 4
         if (phase == 0) pwm4(base, A_ON,A_OFF, C_ON,C_OFF, B_ON,B_OFF, D_ON,D_OFF)
-        else if (phase == 1) pwm4(base, C_ON,C_OFF, B_ON,B_OFF, D_ON,D_OFF, A_ON,A_OFF)
-        else if (phase == 2) pwm4(base, B_ON,B_OFF, D_ON,D_OFF, A_ON,A_OFF, C_ON,C_OFF)
-        else pwm4(base, D_ON,D_OFF, A_ON,A_OFF, C_ON,C_OFF, B_ON,B_OFF)
+        else if (phase == 1) pwm4(base, B_ON,B_OFF, D_ON,D_OFF, C_ON,C_OFF, A_ON,A_OFF)
+        else if (phase == 2) pwm4(base, C_ON,C_OFF, A_ON,A_OFF, D_ON,D_OFF, B_ON,B_OFF)
+        else pwm4(base, D_ON,D_OFF, B_ON,B_OFF, A_ON,A_OFF, C_ON,C_OFF)
     }
 
     // 42BYGH1861A-C: original DFRobot pattern, rotated one phase per step.
@@ -181,7 +287,7 @@ namespace DFR0548 {
         if (stepsPerRev < 1) stepsPerRev = 1
         if (rpm < 1) rpm = 1
         let us = Math.round(60000000 / (stepsPerRev * rpm))
-        if (us < 500) us = 500
+        if (us < 100) us = 100
         return us
     }
 
@@ -318,32 +424,46 @@ namespace DFR0548 {
         let rightPhase = 0
         let leftDone = 0
         let rightDone = 0
-        let leftNext = 0
-        let rightNext = 0
         let leftDelay = stepDelayUs(leftSteps, leftRpm)
         let rightDelay = stepDelayUs(rightSteps, rightRpm)
-        let elapsed = 0
-        let tick = 500
+        let leftTimer = 0
+        let rightTimer = 0
+        let tick = 50
 
+        // Finite scheduler: the counters are the only termination condition.
         while (leftDone < leftCount || rightDone < rightCount) {
-            if (leftDone < leftCount && elapsed >= leftNext) {
+            // If both motors are due together, update all 8 coils in ONE I2C transaction.
+            if (leftDone < leftCount && rightDone < rightCount && leftTimer <= 0 && rightTimer <= 0) {
                 if (leftDirection == Direction.CW) leftPhase++
                 else leftPhase--
-                if (leftType == StepperType.BYJ_28) phase28(leftPort, leftPhase)
-                else phase42(leftPort, leftPhase)
-                leftDone++
-                leftNext += leftDelay
-            }
-            if (rightDone < rightCount && elapsed >= rightNext) {
                 if (rightDirection == Direction.CW) rightPhase++
                 else rightPhase--
-                if (rightType == StepperType.BYJ_28) phase28(rightPort, rightPhase)
-                else phase42(rightPort, rightPhase)
+                tankPhasePair(leftType, leftPhase, rightType, rightPhase)
+                leftDone++
                 rightDone++
-                rightNext += rightDelay
+                leftTimer = leftDelay
+                rightTimer = rightDelay
+            } else {
+                if (leftDone < leftCount && leftTimer <= 0) {
+                    if (leftDirection == Direction.CW) leftPhase++
+                    else leftPhase--
+                    if (leftType == StepperType.BYJ_28) phase28(leftPort, leftPhase)
+                    else phase42(leftPort, leftPhase)
+                    leftDone++
+                    leftTimer = leftDelay
+                }
+                if (rightDone < rightCount && rightTimer <= 0) {
+                    if (rightDirection == Direction.CW) rightPhase++
+                    else rightPhase--
+                    if (rightType == StepperType.BYJ_28) phase28(rightPort, rightPhase)
+                    else phase42(rightPort, rightPhase)
+                    rightDone++
+                    rightTimer = rightDelay
+                }
             }
             control.waitMicros(tick)
-            elapsed += tick
+            leftTimer -= tick
+            rightTimer -= tick
         }
         stopPort(leftPort)
         stopPort(rightPort)
