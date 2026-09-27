@@ -1,7 +1,7 @@
 {
     "name": "DFR0548-StepperServo",
-    "version": "1.3.3",
-    "description": "MakeCode library for DFR0548 with step-count based steppers and 8 servos.",
+    "version": "1.3.4",
+    "description": "MakeCode library for DFR0548 with DFRobot-compatible direction/time based steppers and 8 servos.",
     "license": "MIT",
     "dependencies": {
         "core": "*"

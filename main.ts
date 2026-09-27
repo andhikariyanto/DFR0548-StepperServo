@@ -260,32 +260,87 @@ namespace DFR0548 {
         else pwm4(base, GA_ON,GA_OFF, GD_ON,GD_OFF, GC_ON,GC_OFF, GB_ON,GB_OFF)
     }
 
-    function stepOnce(port: StepperPort, motorType: StepperType, phase: number): void {
-        if (motorType == StepperType.BYJ_28) phase28(port, phase)
-        else phase42(port, phase)
+    // DFRobot's original DFR0548 driver does NOT advance the motor by
+    // changing a 4-phase sequence in software. The PCA9685/HR8833 uses the
+    // four fixed PWM states below as the motor direction command. Keep these
+    // mappings exactly as the original DFRobot library.
+    function drive28(port: StepperPort, direction: Direction): void {
+        let base = 4
+        if (port == StepperPort.M3_M4) base = 0
+        if (direction == Direction.CW) {
+            // CH-A, CH-B, CH-C, CH-D -> channel order base..base+3 = A,C,B,D
+            pwm4(base, A_ON,A_OFF, C_ON,C_OFF, B_ON,B_OFF, D_ON,D_OFF)
+        } else {
+            // Reverse mapping from the original DFRobot driver: D,B,C,A
+            pwm4(base, D_ON,D_OFF, B_ON,B_OFF, C_ON,C_OFF, A_ON,A_OFF)
+        }
     }
 
-    function stepDelayUs(stepsPerRev: number, rpm: number): number {
-        if (stepsPerRev < 1) stepsPerRev = 1
-        if (rpm < 1) rpm = 1
-        let us = Math.round(60000000 / (stepsPerRev * rpm))
-        if (us < 100) us = 100
-        return us
+    function drive42(port: StepperPort, direction: Direction): void {
+        let base = 4
+        if (port == StepperPort.M3_M4) base = 0
+        if (direction == Direction.CW) {
+            // Original DFRobot 42BYGH mapping: D,C,B,A
+            pwm4(base, D_ON,D_OFF, C_ON,C_OFF, B_ON,B_OFF, A_ON,A_OFF)
+        } else {
+            // Original DFRobot reverse mapping: B,A,D,C
+            pwm4(base, B_ON,B_OFF, A_ON,A_OFF, D_ON,D_OFF, C_ON,C_OFF)
+        }
+    }
+
+    function drive(port: StepperPort, motorType: StepperType, direction: Direction): void {
+        if (motorType == StepperType.BYJ_28) drive28(port, direction)
+        else drive42(port, direction)
+    }
+
+    // Both tank motors can be commanded with two 17-byte I2C transactions.
+    // This preserves the proven DFRobot channel mapping while keeping the
+    // left/right command synchronized.
+    function driveTank(leftDirection: Direction, rightDirection: Direction): void {
+        if (leftType == StepperType.BYJ_28) {
+            if (leftDirection == Direction.CW) {
+                pwm4(leftPort == StepperPort.M1_M2 ? 4 : 0, A_ON,A_OFF, C_ON,C_OFF, B_ON,B_OFF, D_ON,D_OFF)
+            } else {
+                pwm4(leftPort == StepperPort.M1_M2 ? 4 : 0, D_ON,D_OFF, B_ON,B_OFF, C_ON,C_OFF, A_ON,A_OFF)
+            }
+        } else {
+            if (leftDirection == Direction.CW) {
+                pwm4(leftPort == StepperPort.M1_M2 ? 4 : 0, D_ON,D_OFF, C_ON,C_OFF, B_ON,B_OFF, A_ON,A_OFF)
+            } else {
+                pwm4(leftPort == StepperPort.M1_M2 ? 4 : 0, B_ON,B_OFF, A_ON,A_OFF, D_ON,D_OFF, C_ON,C_OFF)
+            }
+        }
+
+        if (rightType == StepperType.BYJ_28) {
+            if (rightDirection == Direction.CW) {
+                pwm4(rightPort == StepperPort.M1_M2 ? 4 : 0, A_ON,A_OFF, C_ON,C_OFF, B_ON,B_OFF, D_ON,D_OFF)
+            } else {
+                pwm4(rightPort == StepperPort.M1_M2 ? 4 : 0, D_ON,D_OFF, B_ON,B_OFF, C_ON,C_OFF, A_ON,A_OFF)
+            }
+        } else {
+            if (rightDirection == Direction.CW) {
+                pwm4(rightPort == StepperPort.M1_M2 ? 4 : 0, D_ON,D_OFF, C_ON,C_OFF, B_ON,B_OFF, A_ON,A_OFF)
+            } else {
+                pwm4(rightPort == StepperPort.M1_M2 ? 4 : 0, B_ON,B_OFF, A_ON,A_OFF, D_ON,D_OFF, C_ON,C_OFF)
+            }
+        }
     }
 
     function moveSteps(port: StepperPort, motorType: StepperType, stepsPerRev: number, direction: Direction, steps: number, rpm: number): void {
         init()
         steps = Math.round(Math.abs(steps))
         if (steps <= 0) return
+        if (stepsPerRev < 1) stepsPerRev = 1
         rpm = Math.max(1, Math.min(300, rpm))
-        let phase = 0
-        let delayUs = stepDelayUs(stepsPerRev, rpm)
-        for (let i = 0; i < steps; i++) {
-            if (direction == Direction.CW) phase++
-            else phase--
-            stepOnce(port, motorType, phase)
-            control.waitMicros(delayUs)
-        }
+
+        // The DFR0548 original driver is time/direction based. There is no
+        // position feedback, so 'steps' is converted to the equivalent travel
+        // time from steps/rev and RPM rather than generating a false phase
+        // sequence that only makes the motor vibrate.
+        let durationMs = Math.round(steps * 60000 / (stepsPerRev * rpm))
+        if (durationMs < 1) durationMs = 1
+        drive(port, motorType, direction)
+        basic.pause(durationMs)
         stopPort(port)
     }
 
@@ -397,56 +452,21 @@ namespace DFR0548 {
     // Both motors receive the same number of mechanical revolutions.
     function tankMove(revolutions: number, leftDirection: Direction, rightDirection: Direction): void {
         init()
-        let leftCount = Math.round(Math.abs(revolutions) * leftSteps)
-        let rightCount = Math.round(Math.abs(revolutions) * rightSteps)
-        let maxCount = Math.max(leftCount, rightCount)
-        if (maxCount <= 0) return
+        revolutions = Math.abs(revolutions)
+        if (revolutions <= 0) return
 
-        let leftPhase = 0
-        let rightPhase = 0
-        let leftDone = 0
-        let rightDone = 0
-        let leftDelay = stepDelayUs(leftSteps, leftRpm)
-        let rightDelay = stepDelayUs(rightSteps, rightRpm)
-        let leftTimer = 0
-        let rightTimer = 0
-        let tick = 50
+        // Use the same physical driver behavior as the original DFRobot
+        // library. The two sides are commanded with opposite electrical
+        // directions for forward/backward so a mirrored tank chassis travels
+        // straight instead of spinning in place.
+        driveTank(leftDirection, rightDirection)
 
-        // Finite scheduler: the counters are the only termination condition.
-        while (leftDone < leftCount || rightDone < rightCount) {
-            // If both motors are due together, update all 8 coils in ONE I2C transaction.
-            if (leftDone < leftCount && rightDone < rightCount && leftTimer <= 0 && rightTimer <= 0) {
-                if (leftDirection == Direction.CW) leftPhase++
-                else leftPhase--
-                if (rightDirection == Direction.CW) rightPhase++
-                else rightPhase--
-                tankPhasePair(leftType, leftPhase, rightType, rightPhase)
-                leftDone++
-                rightDone++
-                leftTimer = leftDelay
-                rightTimer = rightDelay
-            } else {
-                if (leftDone < leftCount && leftTimer <= 0) {
-                    if (leftDirection == Direction.CW) leftPhase++
-                    else leftPhase--
-                    if (leftType == StepperType.BYJ_28) phase28(leftPort, leftPhase)
-                    else phase42(leftPort, leftPhase)
-                    leftDone++
-                    leftTimer = leftDelay
-                }
-                if (rightDone < rightCount && rightTimer <= 0) {
-                    if (rightDirection == Direction.CW) rightPhase++
-                    else rightPhase--
-                    if (rightType == StepperType.BYJ_28) phase28(rightPort, rightPhase)
-                    else phase42(rightPort, rightPhase)
-                    rightDone++
-                    rightTimer = rightDelay
-                }
-            }
-            control.waitMicros(tick)
-            leftTimer -= tick
-            rightTimer -= tick
-        }
+        let leftMs = Math.round(revolutions * 60000 / Math.max(1, leftRpm))
+        let rightMs = Math.round(revolutions * 60000 / Math.max(1, rightRpm))
+        let durationMs = Math.max(leftMs, rightMs)
+        if (durationMs < 1) durationMs = 1
+        basic.pause(durationMs)
+
         stopPort(leftPort)
         stopPort(rightPort)
     }
